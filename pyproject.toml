@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "price-scraper"
+version = "1.0.0"
+description = "Configurable daily competitor price scraper (BeautifulSoup -> CSV)."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+price-scraper = "price_scraper.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["price_scraper*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

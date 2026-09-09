@@ -1,0 +1,32 @@
+# Demo config: scrapes the public scraping sandbox books.toscrape.com.
+# To target another shop, change the URLs and the CSS selectors below —
+# no code changes needed.
+
+site:
+  name: "Books to Scrape (demo)"
+  start_url: "https://books.toscrape.com/catalogue/page-1.html"
+  # base_url is used to turn relative product links into absolute URLs.
+  base_url: "https://books.toscrape.com/catalogue/"
+
+selectors:
+  product: "article.product_pod"   # one of these per product on the page
+  name: "h3 a"                      # the <a> inside the product
+  name_attr: "title"               # read the full name from the title attribute
+  price: "p.price_color"           # price text, e.g. "£51.77"
+  availability: "p.instock.availability"
+  url: "h3 a"                      # link to the product detail page
+  url_attr: "href"
+
+pagination:
+  next: "li.next a"                # link to the next page (omit to scrape one page)
+  next_attr: "href"
+
+request:
+  user_agent: "PortfolioPriceScraper/1.0 (+https://github.com/kwattakoning)"
+  timeout: 15
+  delay_seconds: 1.0               # polite pause between page requests
+  max_pages: 3                     # safety cap
+
+output:
+  csv_path: "prices.csv"
+  currency_symbol: "£"
