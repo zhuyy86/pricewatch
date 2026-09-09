@@ -1,9 +1,9 @@
 # PriceWatch · Competitor price snapshot differences
 
 This repository is an MIT-licensed extension/adaptation of
-https://github.com/kwattakoning/web-scraper. The original license, source
-record, and Git history are retained. The extension was developed with Codex
-assistance.
+https://github.com/kwattakoning/web-scraper. The original license and pinned
+source record are retained. This repository is a directly published code
+snapshot rather than a fork. The extension was developed with Codex assistance.
 
 The upstream project already scraped configurable product listings into a
 timestamped CSV. PriceWatch adds atomic SQLite snapshots separated by source,
