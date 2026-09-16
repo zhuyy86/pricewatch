@@ -175,3 +175,17 @@ impersonating a browser.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+
+## 新增：可配置价格告警
+
+在保存 SQLite 快照并生成变化报告时，可以按“最高可接受价格”和“最低降幅”筛选值得关注的商品：
+
+`powershell
+python -m price_scraper -c config.yaml --database outputs/history.db \
+  --report outputs/latest-changes.html \
+  --alert-rules examples/alert_rules.json \
+  --alert-output outputs/alerts.json
+`
+
+告警规则使用 JSON；默认规则作用于全部商品，`products` 可以按稳定的 `url:...` 商品键覆盖。告警结果包含原价、现价、降幅和触发原因，方便后续接邮件、企业微信或定时任务。离线演示可运行 `python scripts/demo_alerts.py`。抓取仍须遵守目标网站的条款、robots 政策和合理访问频率。
