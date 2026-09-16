@@ -9,6 +9,7 @@ from .scraper import scrape
 from .storage import write_rows
 from .history import save_snapshot
 from .report import write_html
+from .alerts import detect_alerts, load_rules, write_alerts
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -36,6 +37,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Store snapshots in SQLite and compare with the previous successful run")
     parser.add_argument("--report", default=None,
                         help="Write an HTML change report (requires --database)")
+    parser.add_argument("--alert-rules", default=None,
+                        help="JSON alert policy (requires --database)")
+    parser.add_argument("--alert-output", default=None,
+                        help="JSON alert output path (defaults beside the CSV)")
     return parser
 
 
@@ -43,6 +48,9 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.report and not args.database:
         print("--report requires --database", file=sys.stderr)
+        return 2
+    if args.alert_rules and not args.database:
+        print("--alert-rules requires --database", file=sys.stderr)
         return 2
 
     try:
@@ -72,6 +80,11 @@ def main(argv: list[str] | None = None) -> int:
             run_id, changes = save_snapshot(products, args.database, config.name)
             if args.report:
                 write_html(changes, args.report, f"{config.name} · PriceWatch changes")
+            if args.alert_rules:
+                rules = load_rules(args.alert_rules)
+                alerts = detect_alerts(changes, rules)
+                alert_output = args.alert_output or f"{config.csv_path}.alerts.json"
+                write_alerts(alerts, alert_output)
         except (OSError, ValueError) as exc:
             print(f"History failed: {exc}", file=sys.stderr)
             return 1
@@ -82,6 +95,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Snapshot {run_id}: {len(changes)} change event(s)")
         if args.report:
             print(f"Report: {args.report}")
+        if args.alert_rules:
+            print(f"Alerts: {alert_output} ({len(alerts)} alert(s))")
     return 0
 
 
