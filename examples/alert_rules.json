@@ -1,0 +1,10 @@
+{
+  "default": {
+    "min_drop_percent": 10
+  },
+  "products": {
+    "url:https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html": {
+      "max_price": 45
+    }
+  }
+}
