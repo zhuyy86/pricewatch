@@ -3,7 +3,7 @@
 
 A configurable Python monitoring pipeline that converts product listings into source-specific SQLite history, structured change events and readable HTML reports.
 
-[Usage reference](USAGE.md) · [Project walkthrough](PROJECT_EXPLAINED_FOR_ME.md) · [Test report](TEST_REPORT.md) · [Source & license](UPSTREAM.md)
+[Developer profile & résumé](https://github.com/zhuyy86/leadreview/blob/main/PROFILE.md) · [Usage reference](USAGE.md) · [Project walkthrough](PROJECT_EXPLAINED_FOR_ME.md) · [Test report](TEST_REPORT.md) · [Source & license](UPSTREAM.md)
 
 ![PriceWatch change report](docs/demo-report.png)
 
