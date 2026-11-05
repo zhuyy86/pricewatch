@@ -16,7 +16,7 @@ A sequence of scraped files is difficult to compare reliably. PriceWatch models 
 ## Engineering highlights
 
 - **Configurable collection:** YAML site settings and CSS selectors separate extraction configuration from code.
-- **Transactional persistence:** SQLite snapshot writes are atomic; separate sources retain independent history.
+- **Transactional persistence:** `BEGIN IMMEDIATE` reserves the SQLite writer before reading the previous snapshot, so competing saves compare against their immediate committed predecessor. Snapshot rows and run metadata commit together; connections close explicitly after use. Separate sources retain independent history.
 - **Stable identity:** product keys support comparison across runs.
 - **Explicit change model:** added, removed, price-change and availability-change events include the comparison context.
 - **Report generation:** escaped HTML output presents changes for review.
@@ -40,7 +40,7 @@ Diff events / HTML report / Alert JSON
 
 ## Verification
 
-The initial delivery passed **27 automated tests** for parsing, configuration, storage and history behavior. Offline fixtures and a two-run demonstration exercise snapshot comparison without depending on an external website. See [TEST_REPORT.md](TEST_REPORT.md).
+The current suite passes **31 automated tests** for parsing, configuration, storage, history and alerts. A controlled two-writer race reproduces and guards against stale snapshot comparisons. A failure injected after run creation verifies that partial snapshot rows and run metadata roll back together. Offline fixtures and a two-run demonstration exercise comparison without depending on an external website. See [TEST_REPORT.md](TEST_REPORT.md).
 
 ## Run
 

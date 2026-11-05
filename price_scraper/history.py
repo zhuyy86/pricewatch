@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
@@ -68,7 +69,11 @@ def save_snapshot(products, database, source, scraped_at=None):
             raise ValueError(f"Duplicate product key in one scrape: {key}")
         current[key] = product
 
-    with _connect(database) as connection:
+    with closing(_connect(database)) as connection, connection:
+        # Reserve the writer before reading the predecessor. A deferred
+        # transaction would let competing scrapes compare against the same old
+        # run even though their inserts commit one after the other.
+        connection.execute("BEGIN IMMEDIATE")
         previous = connection.execute(
             "SELECT id FROM runs WHERE source = ? ORDER BY id DESC LIMIT 1", (source,)
         ).fetchone()
@@ -112,7 +117,7 @@ def save_snapshot(products, database, source, scraped_at=None):
 
 
 def list_runs(database, source=None):
-    with _connect(database) as connection:
+    with closing(_connect(database)) as connection:
         if source is None:
             rows = connection.execute("SELECT * FROM runs ORDER BY id DESC").fetchall()
         else:
