@@ -1,4 +1,8 @@
-from price_scraper.alerts import detect_alerts
+import json
+
+import pytest
+
+from price_scraper.alerts import detect_alerts, load_rules, write_alerts
 from price_scraper.history import Change
 
 
@@ -34,3 +38,35 @@ def test_specific_max_price_overrides_default():
 
     assert len(alerts) == 1
     assert "threshold 50.00" in alerts[0]["reasons"][0]
+
+
+@pytest.mark.parametrize("rules", [
+    [], {"unknown": 1}, {"default": []}, {"products": []},
+    {"products": {"url:absent": False}}, {"default": {"max_prcie": 10}},
+    {"default": {"max_price": float("nan")}}, {"default": {"max_price": "Infinity"}},
+    {"default": {"max_price": True}}, {"default": {"max_price": -1}},
+    {"default": {"max_price": 10**1000}}, {"default": {"min_drop_percent": 101}},
+    {"products": {"url:absent": {"min_drop_percent": "bad"}}},
+])
+def test_complete_policy_is_validated_even_when_no_products_changed(rules):
+    with pytest.raises(ValueError):
+        detect_alerts([], rules)
+
+
+def test_null_threshold_disables_default_and_bom_policy_is_supported(tmp_path):
+    path = tmp_path / "rules.json"
+    path.write_text(json.dumps({
+        "default": {"max_price": 50}, "products": {"url:a": {"max_price": None}}
+    }), encoding="utf-8-sig")
+    rules = load_rules(path)
+    assert detect_alerts([Change("added", "url:a", "A", new_price=20)], rules) == []
+    alerts = detect_alerts([Change("added", "url:b", "B", new_price=20)], rules)
+    output = write_alerts(alerts, tmp_path / "alerts.json")
+    assert json.loads(output.read_text(encoding="utf-8"))["alert_count"] == 1
+
+
+def test_invalid_json_numbers_are_never_written(tmp_path):
+    output = tmp_path / "alerts.json"
+    with pytest.raises(ValueError):
+        write_alerts([{"new_price": float("nan")}], output)
+    assert not output.exists()

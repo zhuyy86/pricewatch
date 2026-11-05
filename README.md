@@ -40,7 +40,7 @@ Diff events / HTML report / Alert JSON
 
 ## Verification
 
-The current suite passes **31 automated tests** for parsing, configuration, storage, history and alerts. A controlled two-writer race reproduces and guards against stale snapshot comparisons. A failure injected after run creation verifies that partial snapshot rows and run metadata roll back together. Offline fixtures and a two-run demonstration exercise comparison without depending on an external website. See [TEST_REPORT.md](TEST_REPORT.md).
+The current suite passes **53 automated tests** for parsing, configuration, storage, history, alerts and CLI preflight validation. A controlled two-writer race reproduces and guards against stale snapshot comparisons. A failure injected after run creation verifies that partial snapshot rows and run metadata roll back together. Offline fixtures and a two-run demonstration exercise comparison without depending on an external website. See [TEST_REPORT.md](TEST_REPORT.md).
 
 ## Run
 

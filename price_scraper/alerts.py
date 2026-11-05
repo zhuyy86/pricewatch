@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
@@ -10,14 +11,27 @@ from .history import Change
 
 
 def load_rules(path: str | Path) -> dict:
-    """Load a JSON alert policy and validate its top-level shape."""
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
+    """Validate the entire policy before scraping or committing a snapshot."""
+    return validate_rules(json.loads(Path(path).read_text(encoding="utf-8-sig")))
+
+
+def validate_rules(payload: dict) -> dict:
+    if not isinstance(payload, dict) or set(payload) - {"default", "products"}:
         raise ValueError("Alert rules must be a JSON object.")
-    products = payload.get("products", {})
-    if products is not None and not isinstance(products, dict):
+    default = payload.get("default")
+    products = payload.get("products")
+    default = {} if default is None else default
+    products = {} if products is None else products
+    if not isinstance(default, dict) or not isinstance(products, dict):
         raise ValueError("The products alert rules must be an object.")
-    return payload
+    for rule in [default, *products.values()]:
+        if not isinstance(rule, dict) or set(rule) - {"max_price", "min_drop_percent"}:
+            raise ValueError("Each alert rule must contain only max_price and min_drop_percent.")
+        _number(rule, "max_price")
+        _number(rule, "min_drop_percent")
+    if any(not isinstance(key, str) or not key.strip() for key in products):
+        raise ValueError("Product alert keys must be non-empty strings.")
+    return {"default": default, "products": products}
 
 
 def _merged_rule(rules: dict, product_key: str) -> dict:
@@ -32,17 +46,22 @@ def _number(rule: dict, field: str) -> float | None:
     value = rule.get(field)
     if value is None:
         return None
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be numeric, not boolean.")
     try:
         result = float(value)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"{field} must be numeric.") from exc
-    if result < 0:
-        raise ValueError(f"{field} must not be negative.")
+    if not math.isfinite(result) or result < 0:
+        raise ValueError(f"{field} must be finite and non-negative.")
+    if field == "min_drop_percent" and result > 100:
+        raise ValueError("min_drop_percent must not exceed 100.")
     return result
 
 
 def detect_alerts(changes: Iterable[Change], rules: dict) -> list[dict]:
     """Return only changes that satisfy a max-price or drop-percent rule."""
+    rules = validate_rules(rules)
     alerts: list[dict] = []
     for change in changes:
         if change.kind not in {"added", "price_changed"}:
@@ -100,7 +119,7 @@ def write_alerts(alerts: list[dict], target: str | Path) -> Path:
         "alerts": alerts,
     }
     target.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
         encoding="utf-8",
     )
     return target

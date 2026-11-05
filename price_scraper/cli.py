@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import sqlite3
 
 from .config import ConfigError, load_config
 from .scraper import scrape
@@ -52,10 +53,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.alert_rules and not args.database:
         print("--alert-rules requires --database", file=sys.stderr)
         return 2
+    if args.alert_output and not args.alert_rules:
+        print("--alert-output requires --alert-rules", file=sys.stderr)
+        return 2
+    if args.max_pages is not None and args.max_pages < 1:
+        print("--max-pages must be positive", file=sys.stderr)
+        return 2
 
     try:
         config = load_config(args.config)
-    except ConfigError as exc:
+        rules = load_rules(args.alert_rules) if args.alert_rules else None
+    except (ConfigError, OSError, UnicodeError, ValueError) as exc:
         print(f"Config error: {exc}", file=sys.stderr)
         return 2
 
@@ -73,7 +81,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Scrape failed: {exc}", file=sys.stderr)
         return 1
 
-    written = write_rows(products, config.csv_path)
+    try:
+        written = write_rows(products, config.csv_path)
+    except (OSError, ValueError) as exc:
+        print(f"CSV output failed: {exc}", file=sys.stderr)
+        return 1
     changes = []
     if args.database:
         try:
@@ -81,11 +93,10 @@ def main(argv: list[str] | None = None) -> int:
             if args.report:
                 write_html(changes, args.report, f"{config.name} · PriceWatch changes")
             if args.alert_rules:
-                rules = load_rules(args.alert_rules)
                 alerts = detect_alerts(changes, rules)
                 alert_output = args.alert_output or f"{config.csv_path}.alerts.json"
                 write_alerts(alerts, alert_output)
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, sqlite3.Error) as exc:
             print(f"History failed: {exc}", file=sys.stderr)
             return 1
     if not args.quiet:
