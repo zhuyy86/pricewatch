@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -75,7 +76,7 @@ def main(argv=None):
         alerts = json.loads(options['alert_path'].read_text(encoding='utf-8'))
         assert alerts['alert_count'] == args.products
         assert options['report_path'].read_text(encoding='utf-8').count('Price changed') == args.products
-        with sqlite3.connect(database) as connection:
+        with closing(sqlite3.connect(database)) as connection:
             assert connection.execute('SELECT count(*) FROM runs').fetchone()[0] == args.runs
             assert connection.execute("SELECT count(*) FROM exports WHERE state = 'published'").fetchone()[0] == expected_jobs
             assert connection.execute('SELECT max(attempts) FROM exports').fetchone()[0] == 2
