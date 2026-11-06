@@ -67,3 +67,12 @@ Python · Requests · BeautifulSoup · SQLite · YAML · pytest
 ## Development & attribution
 
 Independent portfolio extension of an MIT-licensed configurable scraper, developed with Codex assistance. Snapshot persistence, change events and reporting extend the upstream collection pipeline. See [UPSTREAM.md](UPSTREAM.md) and [LICENSE](LICENSE).
+
+
+## Reproduce export recovery
+
+```sh
+python scripts/verify_export_recovery.py --runs 500 --products 20
+```
+
+The [recorded local workload](docs/recovery-workload.json) seeded 500 snapshots, 1,500 export intents and 10,000 CSV rows. A fault after the first file publication interrupted its receipt. Two bounded recovery passes published all 1,500 receipts and preserved one CSV contribution per run/product. Stored CSV payload bytes equal the final file size because intents keep incremental rows. The record includes runtime, host platform, observation time and measured durations; reproduce it to obtain timings for your host. Linux/Windows CI runs a smaller 20-run case.
