@@ -303,3 +303,85 @@ def test_csv_record_error_is_reported_without_publishing_a_snapshot(tmp_path, mo
     assert cli.main(['--database', str(database)]) == 1
     assert 'Snapshot failed:' in capsys.readouterr().err
     assert list_runs(database) == []
+
+
+def test_export_health_tracks_queue_age_attempt_and_publication_times(tmp_path, monkeypatch):
+    database = tmp_path / 'history.db'
+    settings = {'csv_path': tmp_path / 'prices.csv'}
+    moments = iter([1_000, 1_750])
+    monkeypatch.setattr(exports, '_now_ms', lambda: next(moments))
+    save_snapshot([product()], database, 'shop', export_options=settings)
+
+    pending = exports.export_status(database, now_ms=1_600)
+    assert pending['health'] == {
+        'oldest_pending_at': 1_000,
+        'latest_published_at': None,
+        'failed_pending': 0,
+        'future_pending': 0,
+        'max_pending_attempts': 0,
+        'oldest_pending_age_ms': 600,
+        'observed_at': 1_600,
+        'state': 'backlogged',
+    }
+    assert pending['jobs'][0]['pending_age_ms'] == 600
+    assert pending['jobs'][0]['last_attempt_at'] is None
+
+    assert exports.drain_exports(database)['published'] == 1
+    complete = exports.export_status(database, now_ms=2_000)
+    assert complete['health']['state'] == 'healthy'
+    assert complete['health']['latest_published_at'] == 1_750
+    assert complete['health']['oldest_pending_age_ms'] is None
+    assert complete['jobs'][0]['last_attempt_at'] == 1_750
+    assert complete['jobs'][0]['published_at'] == 1_750
+
+
+def test_failed_export_is_blocked_and_health_records_clock_skew(tmp_path, monkeypatch):
+    database = tmp_path / 'history.db'
+    settings = {'csv_path': tmp_path / 'prices.csv'}
+    moments = iter([5_000, 5_100])
+    monkeypatch.setattr(exports, '_now_ms', lambda: next(moments))
+    save_snapshot([product()], database, 'shop', export_options=settings)
+    monkeypatch.setattr(exports, '_publish', lambda _: (_ for _ in ()).throw(OSError('volume full')))
+    assert exports.drain_exports(database)['pending'] == 1
+
+    status = exports.export_status(database, now_ms=4_000)
+    assert status['health']['state'] == 'blocked'
+    assert status['health']['failed_pending'] == 1
+    assert status['health']['future_pending'] == 1
+    assert status['health']['oldest_pending_age_ms'] == 0
+    assert status['health']['max_pending_attempts'] == 1
+    assert status['jobs'][0]['last_attempt_at'] == 5_100
+
+
+def test_pre_observability_database_migrates_timestamp_columns(tmp_path):
+    database = tmp_path / 'history.db'
+    with sqlite3.connect(database) as connection:
+        connection.execute('''CREATE TABLE exports (
+            id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL, kind TEXT NOT NULL,
+            target TEXT NOT NULL, payload BLOB NOT NULL, payload_sha256 TEXT NOT NULL,
+            sha256 TEXT NOT NULL, byte_count INTEGER NOT NULL, expected_sha256 TEXT,
+            state TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT, UNIQUE(run_id, kind))''')
+    status = exports.export_status(database, now_ms=10)
+    assert status['health']['state'] == 'healthy'
+    with sqlite3.connect(database) as connection:
+        columns = {row[1] for row in connection.execute('PRAGMA table_info(exports)')}
+    assert {'enqueued_at', 'last_attempt_at', 'published_at'} <= columns
+
+
+def test_cli_health_gate_uses_saved_queue_state_without_scraping(tmp_path, monkeypatch, capsys):
+    database = tmp_path / 'history.db'
+    settings = {'csv_path': tmp_path / 'prices.csv'}
+    save_snapshot([product()], database, 'shop', export_options=settings)
+
+    def unexpected(*args):
+        pytest.fail('Health status must read only the saved export queue')
+
+    monkeypatch.setattr(cli, 'load_config', unexpected)
+    monkeypatch.setattr(cli, 'scrape', unexpected)
+    args = ['--database', str(database), '--exports-status', '--require-healthy-exports']
+    assert cli.main(args) == 1
+    assert json.loads(capsys.readouterr().out)['health']['state'] == 'backlogged'
+    assert exports.drain_exports(database)['pending'] == 0
+    assert cli.main(args) == 0
+    assert json.loads(capsys.readouterr().out)['health']['state'] == 'healthy'

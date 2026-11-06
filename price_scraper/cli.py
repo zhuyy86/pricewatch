@@ -49,22 +49,31 @@ def build_parser() -> argparse.ArgumentParser:
                              help="Publish saved export intents from --database")
     maintenance.add_argument("--exports-status", action="store_true",
                              help="Print export counts, checksums and errors from --database")
+    parser.add_argument("--require-healthy-exports", action="store_true",
+                        help="With --exports-status, exit nonzero while exports are pending or failed")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.recover_exports or args.exports_status:
-        if not args.database or (any([args.output, args.report, args.alert_rules, args.alert_output]) or args.max_pages is not None):
+        if (not args.database or
+                any([args.output, args.report, args.alert_rules, args.alert_output]) or
+                args.max_pages is not None or
+                (args.require_healthy_exports and not args.exports_status)):
             print("Export maintenance requires --database with its saved destinations.", file=sys.stderr)
             return 2
         try:
             result = drain_exports(args.database) if args.recover_exports else export_status(args.database)
             print(json.dumps(result, ensure_ascii=False, indent=2))
-            return 1 if args.recover_exports and result['pending'] else 0
+            unhealthy = args.exports_status and args.require_healthy_exports and result['health']['state'] != 'healthy'
+            return 1 if (args.recover_exports and result['pending']) or unhealthy else 0
         except (OSError, ValueError, sqlite3.Error, csv.Error) as exc:
             print(f"Export maintenance failed: {exc}", file=sys.stderr)
             return 1
+    if args.require_healthy_exports:
+        print("--require-healthy-exports requires --exports-status", file=sys.stderr)
+        return 2
     if args.report and not args.database:
         print("--report requires --database", file=sys.stderr)
         return 2

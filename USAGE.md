@@ -198,10 +198,11 @@ Database mode saves the snapshot and export intents in one SQLite transaction, t
 ```sh
 python -m price_scraper -c config.yaml --database outputs/history.db --report outputs/changes.html --alert-rules examples/alert_rules.json
 python -m price_scraper --database outputs/history.db --exports-status
+python -m price_scraper --database outputs/history.db --exports-status --require-healthy-exports
 python -m price_scraper --database outputs/history.db --recover-exports
 ```
 
-Use the alert-policy path for your own checked-in policy. Status includes pending/published counts, run and artifact IDs, destination, SHA-256, file bytes, stored payload bytes, attempt counts and the last error. Recovery uses the persisted destinations and payloads; its inputs are the database and available output filesystem. Exit 0 records a drained queue; exit 1 keeps pending work available for recovery; exit 2 identifies configuration or argument errors. A scrape whose export encounters an I/O error still has a committed run ID. Resume that export through the recovery command.
+Use the alert-policy path for your own checked-in policy. Status includes pending/published counts, run and artifact IDs, destination, SHA-256, file bytes, stored payload bytes, attempt counts, the last error, enqueue/attempt/publication times and each pending item's age. Its health summary reports `healthy`, `backlogged` or `blocked`, the oldest pending age, future timestamps caused by wall-clock movement, the latest successful publication and the largest pending attempt count. `--require-healthy-exports` turns this snapshot into a monitoring probe: a drained queue exits 0 and a pending or blocked queue exits 1. Recovery uses the persisted destinations and payloads; its inputs are the database and available output filesystem. Exit 2 identifies configuration or argument errors. A scrape whose export encounters an I/O error still has a committed run ID. Resume that export through the recovery command.
 
 A SQLite writer lock coordinates exporters using the same database. Publication writes a temporary file beside its destination, flushes and file-syncs it, then replaces the final name. A process exit after replacement is recovered by comparing the destination checksum with the intended checksum and recording its receipt. This gives each saved run one CSV contribution across retries. Files publish individually; status shows progress through a multi-file batch.
 

@@ -8,9 +8,14 @@ from io import StringIO
 import os
 from pathlib import Path
 import tempfile
+import time
 
 from .history import _connect
 from .storage import FIELDNAMES
+
+
+def _now_ms() -> int:
+    return time.time_ns() // 1_000_000
 
 
 def _digest(payload: bytes) -> str:
@@ -66,6 +71,7 @@ def enqueue_exports(connection, run_id, products, changes, stamp, options, datab
     from .alerts import detect_alerts, render_alerts
     from .report import render_html
     targets = validate_targets(database, options)
+    enqueued_at = _now_ms()
     for kind, target in targets.items():
         previous = connection.execute(
             'SELECT * FROM exports WHERE target = ? ORDER BY id DESC LIMIT 1',
@@ -89,8 +95,10 @@ def enqueue_exports(connection, run_id, products, changes, stamp, options, datab
             payload = render_alerts(detect_alerts(changes, options['rules']), generated_at=stamp).encode('utf-8')
             stored = payload
         connection.execute('''INSERT INTO exports(run_id, kind, target, payload, payload_sha256,
-                              sha256, byte_count, expected_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-                           (run_id, kind, str(target), stored, _digest(stored), _digest(payload), len(payload), expected))
+                              sha256, byte_count, expected_sha256, enqueued_at)
+                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                           (run_id, kind, str(target), stored, _digest(stored), _digest(payload),
+                            len(payload), expected, enqueued_at))
 
 
 def _materialize(connection, job):
@@ -163,11 +171,15 @@ def drain_exports(database, limit=1000):
                     _publish(prepared)
                 except (OSError, ValueError) as exc:
                     error = str(exc)
-                    connection.execute('UPDATE exports SET attempts = attempts + 1, last_error = ? WHERE id = ?',
-                                       (error[:1000], job['id']))
+                    connection.execute('''UPDATE exports SET attempts = attempts + 1, last_error = ?,
+                                          last_attempt_at = ? WHERE id = ?''',
+                                       (error[:1000], _now_ms(), job['id']))
                 else:
-                    connection.execute("UPDATE exports SET state = 'published', attempts = attempts + 1, last_error = NULL WHERE id = ?",
-                                       (job['id'],))
+                    completed_at = _now_ms()
+                    connection.execute('''UPDATE exports SET state = 'published', attempts = attempts + 1,
+                                          last_error = NULL, last_attempt_at = ?, published_at = ?
+                                          WHERE id = ?''',
+                                       (completed_at, completed_at, job['id']))
                     published += 1
             if error:
                 break
@@ -175,16 +187,35 @@ def drain_exports(database, limit=1000):
     return {'published': published, 'pending': pending, 'error': error}
 
 
-def export_status(database, limit=100):
+def export_status(database, limit=100, *, now_ms=None):
     if not Path(database).is_file():
         raise ValueError('Status requires an existing PriceWatch database.')
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
         raise ValueError('Status limit must be an integer from 1 to 1000.')
+    observed_at = _now_ms() if now_ms is None else now_ms
+    if not isinstance(observed_at, int) or isinstance(observed_at, bool) or observed_at < 0:
+        raise ValueError('Status time must be a non-negative epoch millisecond integer.')
     with closing(_connect(database)) as connection, connection:
         connection.execute('BEGIN')
         counts = {'pending': 0, 'published': 0}
         counts.update(dict(connection.execute('SELECT state, count(*) FROM exports GROUP BY state')))
+        summary = dict(connection.execute('''SELECT
+                        min(enqueued_at) FILTER (WHERE state = 'pending') AS oldest_pending_at,
+                        max(published_at) AS latest_published_at,
+                        count(*) FILTER (WHERE state = 'pending' AND last_error IS NOT NULL) AS failed_pending,
+                        count(*) FILTER (WHERE state = 'pending' AND enqueued_at > ?) AS future_pending,
+                        coalesce(max(attempts) FILTER (WHERE state = 'pending'), 0) AS max_pending_attempts
+                        FROM exports''', (observed_at,)).fetchone())
+        oldest = summary['oldest_pending_at']
+        summary['oldest_pending_age_ms'] = None if oldest is None else max(0, observed_at - oldest)
+        summary['observed_at'] = observed_at
+        summary['state'] = ('blocked' if summary['failed_pending'] else
+                            'backlogged' if counts['pending'] else 'healthy')
         jobs = [dict(row) for row in connection.execute('''SELECT id, run_id, kind, target, sha256, state,
-                        attempts, last_error, byte_count AS bytes, length(payload) AS stored_bytes
-                        FROM exports ORDER BY state = 'pending' DESC, id LIMIT ?''', (limit,))]
-    return {'counts': counts, 'jobs': jobs}
+                        attempts, last_error, enqueued_at, last_attempt_at, published_at,
+                        CASE WHEN state = 'pending' AND enqueued_at IS NOT NULL
+                             THEN max(0, ? - enqueued_at) END AS pending_age_ms,
+                        byte_count AS bytes, length(payload) AS stored_bytes
+                        FROM exports ORDER BY state = 'pending' DESC, id LIMIT ?''',
+                        (observed_at, limit))]
+    return {'counts': counts, 'health': summary, 'jobs': jobs}

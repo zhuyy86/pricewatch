@@ -68,6 +68,9 @@ def _connect(path: str | Path) -> sqlite3.Connection:
             state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'published')),
             attempts INTEGER NOT NULL DEFAULT 0,
             last_error TEXT,
+            enqueued_at INTEGER,
+            last_attempt_at INTEGER,
+            published_at INTEGER,
             UNIQUE(run_id, kind)
         );
         CREATE INDEX IF NOT EXISTS idx_exports_pending ON exports(id) WHERE state = 'pending';
@@ -78,6 +81,10 @@ def _connect(path: str | Path) -> sqlite3.Connection:
             sha256 TEXT NOT NULL
         );
     """)
+    columns = {row['name'] for row in connection.execute('PRAGMA table_info(exports)')}
+    for name in ('enqueued_at', 'last_attempt_at', 'published_at'):
+        if name not in columns:
+            connection.execute(f'ALTER TABLE exports ADD COLUMN {name} INTEGER')
     return connection
 
 
