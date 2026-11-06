@@ -109,17 +109,18 @@ def detect_alerts(changes: Iterable[Change], rules: dict) -> list[dict]:
     return alerts
 
 
+def render_alerts(alerts: list[dict], generated_at: str | None = None) -> str:
+    payload = {
+        "generated_at": generated_at or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "alert_count": len(alerts),
+        "alerts": alerts,
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
+
+
 def write_alerts(alerts: list[dict], target: str | Path) -> Path:
     """Write an audit-friendly JSON alert result."""
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "alert_count": len(alerts),
-        "alerts": alerts,
-    }
-    target.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
-        encoding="utf-8",
-    )
+    target.write_text(render_alerts(alerts), encoding="utf-8")
     return target

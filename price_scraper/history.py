@@ -55,11 +55,33 @@ def _connect(path: str | Path) -> sqlite3.Connection:
             PRIMARY KEY (run_id, product_key)
         );
         CREATE INDEX IF NOT EXISTS idx_snapshots_key ON snapshots(product_key);
+        CREATE TABLE IF NOT EXISTS exports (
+            id INTEGER PRIMARY KEY,
+            run_id INTEGER NOT NULL REFERENCES runs(id),
+            kind TEXT NOT NULL CHECK (kind IN ('csv', 'html', 'alerts')),
+            target TEXT NOT NULL,
+            payload BLOB NOT NULL,
+            payload_sha256 TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            byte_count INTEGER NOT NULL,
+            expected_sha256 TEXT,
+            state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'published')),
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            UNIQUE(run_id, kind)
+        );
+        CREATE INDEX IF NOT EXISTS idx_exports_pending ON exports(id) WHERE state = 'pending';
+        CREATE INDEX IF NOT EXISTS idx_exports_target ON exports(target, id DESC);
+        CREATE TABLE IF NOT EXISTS export_baselines (
+            target TEXT PRIMARY KEY,
+            payload BLOB NOT NULL,
+            sha256 TEXT NOT NULL
+        );
     """)
     return connection
 
 
-def save_snapshot(products, database, source, scraped_at=None):
+def save_snapshot(products, database, source, scraped_at=None, *, export_options=None):
     """Store one atomic snapshot and return (run_id, changes from previous run)."""
     stamp = scraped_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
     current = {}
@@ -96,6 +118,15 @@ def save_snapshot(products, database, source, scraped_at=None):
              for key, p in current.items()],
         )
 
+        changes = compare_products(current, old)
+        if export_options is not None:
+            from .exports import enqueue_exports
+            enqueue_exports(connection, run_id, list(current.values()), changes, stamp, export_options, database)
+    return run_id, changes
+
+
+def compare_products(current, old):
+    """Compare one source's normalized current products with its predecessor."""
     changes = []
     for key in sorted(current.keys() | old.keys()):
         new, before = current.get(key), old.get(key)
@@ -113,7 +144,7 @@ def save_snapshot(products, database, source, scraped_at=None):
                 changes.append(Change("availability_changed", key, new.name,
                                       old_availability=before["availability"],
                                       new_availability=new.availability, url=new.url))
-    return run_id, changes
+    return changes
 
 
 def list_runs(database, source=None):

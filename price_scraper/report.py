@@ -12,9 +12,7 @@ LABELS = {
 }
 
 
-def write_html(changes, target, title="PriceWatch snapshot changes"):
-    target = Path(target)
-    target.parent.mkdir(parents=True, exist_ok=True)
+def render_html(changes, title="PriceWatch snapshot changes"):
     rows = []
     for change in changes:
         item = asdict(change)
@@ -37,5 +35,11 @@ a{{color:#175cd3}}</style><h1>{escape(title)}</h1>
 the latest successful snapshot; it does not prove the product was discontinued.</p>
 <table><thead><tr><th>Change</th><th>Product</th><th>Before</th><th>After</th><th>Link</th></tr>
 </thead><tbody>{body}</tbody></table></html>"""
-    target.write_text(html, encoding="utf-8")
+    return html
+
+
+def write_html(changes, target, title="PriceWatch snapshot changes"):
+    target = Path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(render_html(changes, title), encoding="utf-8")
     return target

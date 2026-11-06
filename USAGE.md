@@ -189,3 +189,22 @@ python -m price_scraper -c config.yaml --database outputs/history.db \
 `
 
 告警规则使用 JSON；默认规则作用于全部商品，`products` 可以按稳定的 `url:...` 商品键覆盖。告警结果包含原价、现价、降幅和触发原因，方便后续接邮件、企业微信或定时任务。离线演示可运行 `python scripts/demo_alerts.py`。抓取仍须遵守目标网站的条款、robots 政策和合理访问频率。
+
+
+## Recoverable database-mode exports
+
+Database mode saves the snapshot and export intents in one SQLite transaction, then publishes each file from the saved bytes. CSV history imports its existing schema-compatible file once. Each subsequent intent stores that run's additional rows; recovery rebuilds the complete projection in commit order. HTML and alert JSON retain the original comparison, rules and observation timestamp.
+
+```sh
+python -m price_scraper -c config.yaml --database outputs/history.db --report outputs/changes.html --alert-rules examples/alert_rules.json
+python -m price_scraper --database outputs/history.db --exports-status
+python -m price_scraper --database outputs/history.db --recover-exports
+```
+
+Use the alert-policy path for your own checked-in policy. Status includes pending/published counts, run and artifact IDs, destination, SHA-256, file bytes, stored payload bytes, attempt counts and the last error. Recovery uses the persisted destinations and payloads; its inputs are the database and available output filesystem. Exit 0 records a drained queue; exit 1 keeps pending work available for recovery; exit 2 identifies configuration or argument errors. A scrape whose export encounters an I/O error still has a committed run ID. Resume that export through the recovery command.
+
+A SQLite writer lock coordinates exporters using the same database. Publication writes a temporary file beside its destination, flushes and file-syncs it, then replaces the final name. A process exit after replacement is recovered by comparing the destination checksum with the intended checksum and recording its receipt. This gives each saved run one CSV contribution across retries. Files publish individually; status shows progress through a multi-file batch.
+
+Give one database ownership of its managed artifact paths. Paths are checked against database/sidecar files, configuration, policy and other destinations. An external content edit becomes a pending conflict; restoring the expected previous version allows recovery. Changed content, symbolic links and stored-byte corruption receive explicit errors. Missing managed files can be rebuilt during a pending publication. CSV-only mode retains upstream append semantics.
+
+Scope: a local filesystem supporting atomic replacement, cooperating processes using one database, and ordinary I/O errors/process exits. Whole-directory power-loss durability and independent external writers require a stronger storage coordination design. An abrupt exit during staging can leave a `.pricewatch-export-` file; clean these after the exporting processes exit. CSV reconstruction scans the saved rows for the target, while retained payload storage grows with the per-run additions. Retention remains an explicit operational follow-up.
