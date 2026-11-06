@@ -1,5 +1,5 @@
 {
-  "observed_at": "2026-11-06T07:40:52.171604+00:00",
+  "observed_at": "2026-11-06T10:09:19.689822+00:00",
   "python": "3.12.14",
   "platform": "linux",
   "runs": 500,
@@ -12,7 +12,7 @@
   "stored_csv_payload_bytes": 868216,
   "injected_failure": "after first publication, before receipt",
   "recovery_passes": 2,
-  "seed_ms": 4083.4,
-  "recovery_and_verification_ms": 1085.58,
+  "seed_ms": 1262.18,
+  "recovery_and_verification_ms": 1483.78,
   "scope": "Local temporary SQLite database and files; correctness and storage exercise. Timings describe this run."
 }

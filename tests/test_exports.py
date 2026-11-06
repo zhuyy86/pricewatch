@@ -385,3 +385,29 @@ def test_cli_health_gate_uses_saved_queue_state_without_scraping(tmp_path, monke
     assert exports.drain_exports(database)['pending'] == 0
     assert cli.main(args) == 0
     assert json.loads(capsys.readouterr().out)['health']['state'] == 'healthy'
+
+
+def test_csv_enqueue_and_recovery_stream_saved_chunks_without_full_materialization(tmp_path, monkeypatch):
+    database = tmp_path / 'history.db'
+    settings = {'csv_path': tmp_path / 'prices.csv'}
+    save_snapshot([product(10)], database, 'shop', 'first', export_options=settings)
+
+    def unexpected(*args):
+        pytest.fail('CSV projection must use chunked hashing and publication')
+
+    monkeypatch.setattr(exports, '_materialize', unexpected)
+    save_snapshot([product(8)], database, 'shop', 'second', export_options=settings)
+    monkeypatch.setattr(Path, 'read_bytes', unexpected)
+    assert exports.drain_exports(database)['pending'] == 0
+    assert [row['price'] for row in rows(settings['csv_path'])] == ['10', '8']
+
+
+def test_streamed_csv_projection_verifies_final_size_metadata(tmp_path):
+    database = tmp_path / 'history.db'
+    settings = {'csv_path': tmp_path / 'prices.csv'}
+    save_snapshot([product()], database, 'shop', export_options=settings)
+    with sqlite3.connect(database) as connection:
+        connection.execute('UPDATE exports SET byte_count = byte_count + 1')
+    result = exports.drain_exports(database)
+    assert result['pending'] == 1 and 'checksum' in result['error']
+    assert not settings['csv_path'].exists()

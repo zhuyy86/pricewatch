@@ -22,6 +22,14 @@ def _digest(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open('rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def validate_targets(database, options, protected=()):
     """Resolve target identities before a scrape and again before enqueueing."""
     kinds = {'csv': options['csv_path']}
@@ -66,6 +74,54 @@ def _csv_payload(base: bytes, products, stamp) -> bytes:
     return base + (b'' if base.endswith((b'\n', b'\r')) else b'\n') + suffix
 
 
+def _csv_chunk(products, stamp, *, include_header=False, prepend_newline=False) -> bytes:
+    buffer = StringIO(newline='')
+    writer = csv.DictWriter(buffer, fieldnames=FIELDNAMES, lineterminator='\n')
+    if include_header:
+        writer.writeheader()
+    for product in products:
+        writer.writerow({'scraped_at': stamp, **product.as_row()})
+    payload = buffer.getvalue().encode('utf-8')
+    if include_header:
+        payload = b'\xef\xbb\xbf' + payload
+    if prepend_newline:
+        payload = b'\n' + payload
+    return payload
+
+
+def _csv_parts(connection, job):
+    baseline = connection.execute(
+        'SELECT payload, sha256 FROM export_baselines WHERE target = ?', (job['target'],)
+    ).fetchone()
+    if baseline is None:
+        raise ValueError('CSV baseline checksum failed.')
+    payload = bytes(baseline['payload'])
+    if _digest(payload) != baseline['sha256']:
+        raise ValueError('CSV baseline checksum failed.')
+    yield payload
+    for part in connection.execute(
+            'SELECT payload, payload_sha256 FROM exports WHERE target = ? AND id <= ? ORDER BY id',
+            (job['target'], job['id'])):
+        payload = bytes(part['payload'])
+        if _digest(payload) != part['payload_sha256']:
+            raise ValueError('Persisted export checksum failed.')
+        yield payload
+
+
+def _csv_projection_state(connection, job):
+    digest = hashlib.sha256()
+    size = 0
+    last_byte = None
+    for payload in _csv_parts(connection, job):
+        digest.update(payload)
+        size += len(payload)
+        if payload:
+            last_byte = payload[-1]
+    if digest.hexdigest() != job['sha256'] or size != job['byte_count']:
+        raise ValueError('Persisted export checksum failed.')
+    return digest, size, last_byte
+
+
 def enqueue_exports(connection, run_id, products, changes, stamp, options, database):
     """Called inside the snapshot's BEGIN IMMEDIATE transaction."""
     from .alerts import detect_alerts, render_alerts
@@ -79,41 +135,49 @@ def enqueue_exports(connection, run_id, products, changes, stamp, options, datab
         ).fetchone()
         if previous and previous['kind'] != kind:
             raise ValueError('An export path is already assigned to another artifact kind.')
-        base = _materialize(connection, previous) if previous else (target.read_bytes() if target.exists() else b'')
-        expected = previous['sha256'] if previous else (_digest(base) if target.exists() else None)
         if kind == 'csv':
-            payload = _csv_payload(base, products, stamp)
             if previous is None:
+                base = target.read_bytes() if target.exists() else b''
+                payload = _csv_payload(base, products, stamp)
                 connection.execute('INSERT INTO export_baselines VALUES (?, ?, ?)',
                                    (str(target), base, _digest(base)))
-            # Persist each run's rows once; the combined CSV is a projection.
-            stored = payload[len(base):]
+                stored = payload[len(base):]
+                expected = _digest(base) if target.exists() else None
+                final_sha256 = _digest(payload)
+                final_size = len(payload)
+            else:
+                prior_digest, prior_size, last_byte = _csv_projection_state(connection, previous)
+                stored = _csv_chunk(products, stamp,
+                                    prepend_newline=prior_size > 0 and last_byte not in (10, 13))
+                final_digest = prior_digest.copy()
+                final_digest.update(stored)
+                expected = previous['sha256']
+                final_sha256 = final_digest.hexdigest()
+                final_size = prior_size + len(stored)
         elif kind == 'html':
+            if previous:
+                _materialize(connection, previous)
+            expected = previous['sha256'] if previous else (_file_digest(target) if target.exists() else None)
             payload = render_html(changes, options.get('title', 'PriceWatch snapshot changes')).encode('utf-8')
             stored = payload
+            final_sha256, final_size = _digest(payload), len(payload)
         else:
+            if previous:
+                _materialize(connection, previous)
+            expected = previous['sha256'] if previous else (_file_digest(target) if target.exists() else None)
             payload = render_alerts(detect_alerts(changes, options['rules']), generated_at=stamp).encode('utf-8')
             stored = payload
+            final_sha256, final_size = _digest(payload), len(payload)
         connection.execute('''INSERT INTO exports(run_id, kind, target, payload, payload_sha256,
                               sha256, byte_count, expected_sha256, enqueued_at)
                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                           (run_id, kind, str(target), stored, _digest(stored), _digest(payload),
-                            len(payload), expected, enqueued_at))
+                           (run_id, kind, str(target), stored, _digest(stored), final_sha256,
+                            final_size, expected, enqueued_at))
 
 
 def _materialize(connection, job):
     if job['kind'] == 'csv':
-        baseline = connection.execute('SELECT * FROM export_baselines WHERE target = ?', (job['target'],)).fetchone()
-        if baseline is None or _digest(bytes(baseline['payload'])) != baseline['sha256']:
-            raise ValueError('CSV baseline checksum failed.')
-        chunks = [bytes(baseline['payload'])]
-        for part in connection.execute('SELECT payload, payload_sha256 FROM exports WHERE target = ? AND id <= ? ORDER BY id',
-                                       (job['target'], job['id'])):
-            chunk = bytes(part['payload'])
-            if _digest(chunk) != part['payload_sha256']:
-                raise ValueError('Persisted export checksum failed.')
-            chunks.append(chunk)
-        payload = b''.join(chunks)
+        payload = b''.join(_csv_parts(connection, job))
     else:
         payload = bytes(job['payload'])
     if _digest(payload) != job['sha256'] or len(payload) != job['byte_count']:
@@ -123,10 +187,12 @@ def _materialize(connection, job):
 
 def _publish(job):
     """Publish one complete payload; the caller holds this database's writer lock."""
+    if job['kind'] == 'csv' and job.get('_connection') is not None:
+        return _publish_csv(job['_connection'], job)
     target = Path(job['target'])
     if target.is_symlink():
         raise ValueError('Export target became a symbolic link: ' + str(target))
-    current = _digest(target.read_bytes()) if target.exists() else None
+    current = _file_digest(target) if target.exists() else None
     payload = bytes(job['payload'])
     if _digest(payload) != job['sha256']:
         raise ValueError('Persisted export checksum failed.')
@@ -140,6 +206,32 @@ def _publish(job):
         with tempfile.NamedTemporaryFile(dir=target.parent, prefix='.pricewatch-export-', delete=False) as handle:
             temporary = Path(handle.name)
             handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _publish_csv(connection, job):
+    """Reconstruct a CSV projection directly into staging with bounded transient memory."""
+    target = Path(job['target'])
+    if target.is_symlink():
+        raise ValueError('Export target became a symbolic link: ' + str(target))
+    _csv_projection_state(connection, job)
+    current = _file_digest(target) if target.exists() else None
+    if current == job['sha256']:
+        return
+    if current is not None and current != job['expected_sha256']:
+        raise ValueError('Export target changed externally; restore its expected version before recovery: ' + str(target))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=target.parent, prefix='.pricewatch-export-', delete=False) as handle:
+            temporary = Path(handle.name)
+            for payload in _csv_parts(connection, job):
+                handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, target)
@@ -167,7 +259,10 @@ def drain_exports(database, limit=1000):
                     break
                 try:
                     prepared = dict(job)
-                    prepared['payload'] = _materialize(connection, job)
+                    if job['kind'] == 'csv':
+                        prepared['_connection'] = connection
+                    else:
+                        prepared['payload'] = _materialize(connection, job)
                     _publish(prepared)
                 except (OSError, ValueError) as exc:
                     error = str(exc)

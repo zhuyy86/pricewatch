@@ -16,7 +16,7 @@ A sequence of scraped files is difficult to compare reliably. PriceWatch models 
 ## Engineering highlights
 
 - **Configurable collection:** YAML site settings and CSS selectors separate extraction configuration from code.
-- **Recoverable export queue:** snapshot rows, change-derived CSV/HTML/alert payloads and checksums commit together. Staged publication, durable receipts and offline recovery close the database-to-file boundary. CSV rows are stored incrementally and reconstructed in commit order. Persistent enqueue, attempt and publication timestamps expose backlog age and blocked exports to health checks.
+- **Recoverable export queue:** snapshot rows, change-derived CSV/HTML/alert payloads and checksums commit together. Staged publication, durable receipts and offline recovery close the database-to-file boundary. CSV rows are stored incrementally, checksum-verified and streamed into staging in commit order, so recovery avoids a second full-history byte buffer. Persistent enqueue, attempt and publication timestamps expose backlog age and blocked exports to health checks.
 - **Transactional persistence:** `BEGIN IMMEDIATE` reserves the SQLite writer before reading the previous snapshot, so competing saves compare against their immediate committed predecessor. Snapshot rows and run metadata commit together; connections close explicitly after use. Separate sources retain independent history.
 - **Stable identity:** product keys support comparison across runs.
 - **Explicit change model:** added, removed, price-change and availability-change events include the comparison context.
@@ -41,7 +41,7 @@ Diff events / HTML report / Alert JSON
 
 ## Verification
 
-The current suite passes **76 automated tests** for parsing, configuration, storage, history, alerts and CLI preflight validation. A controlled two-writer race reproduces and guards against stale snapshot comparisons. A failure injected after run creation verifies that partial snapshot rows and run metadata roll back together. Offline fixtures and a two-run demonstration exercise comparison without depending on an external website. See [TEST_REPORT.md](TEST_REPORT.md).
+The current suite passes **78 automated tests** for parsing, configuration, storage, history, alerts and CLI preflight validation. A controlled two-writer race reproduces and guards against stale snapshot comparisons. A failure injected after run creation verifies that partial snapshot rows and run metadata roll back together. Offline fixtures and a two-run demonstration exercise comparison without depending on an external website. See [TEST_REPORT.md](TEST_REPORT.md).
 
 ## Run
 
